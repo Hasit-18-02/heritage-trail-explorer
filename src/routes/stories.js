@@ -1,0 +1,11 @@
+    const express = require('express');
+    const { z } = require('zod');
+    const Story = require('../models/Story');
+    const Place = require('../models/Place');
+    const { optionalAuth, allowRoles } = require('../middleware/auth');
+    const router = express.Router();
+    const schema = z.object({ title: z.string().trim().min(3).max(180), body: z.string().trim().min(20).max(30000), sourceTitle: z.string().max(250).optional(), sourceUrl: z.string().url().or(z.literal('')).optional(), place: z.string().regex(/^[a-f\d]{24}$/i).optional() });
+    router.get('/', async (req, res, next) => { try { const filter = { status: 'approved', visibility: 'public' }; if (req.query.place) filter.place = req.query.place; const stories = await Story.find(filter).select('-createdBy -reviewedBy -__v').populate('place', 'name slug city').sort({ createdAt: -1 }).limit(Math.min(Number(req.query.limit) || 30, 100)); res.json({ success: true, stories }); } catch (e) { next(e); } });
+    router.post('/', optionalAuth, allowRoles('curator', 'guide', 'admin'), async (req, res, next) => { try { const p = schema.safeParse(req.body); if (!p.success) return res.status(400).json({ success: false, error: p.error.issues[0].message }); if (p.data.place && !(await Place.exists({ _id: p.data.place }))) return res.status(400).json({ success: false, error: 'Selected place does not exist.' }); const story = await Story.create({ ...p.data, createdBy: req.user._id, status: 'pending', visibility: 'editorial' }); res.status(201).json({ success: true, story }); } catch (e) { next(e); } });
+    router.patch('/:id/review', optionalAuth, allowRoles('admin'), async (req, res, next) => { try { const { status } = req.body; if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ success: false, error: 'status must be approved or rejected.' }); const story = await Story.findByIdAndUpdate(req.params.id, { status, visibility: status === 'approved' ? 'public' : 'editorial', reviewedBy: req.user._id, reviewedAt: new Date() }, { new: true, runValidators: true }); if (!story) return res.status(404).json({ success: false, error: 'Story not found.' }); res.json({ success: true, story }); } catch (e) { next(e); } });
+    module.exports = router;
